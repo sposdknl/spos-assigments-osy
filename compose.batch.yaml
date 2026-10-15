@@ -1,0 +1,20 @@
+# Jednorázový příkaz: docker compose -f compose.batch.yaml run --rm batch ...
+services:
+  batch:
+    build: .
+    env_file: .env.batch
+    entrypoint: ["python", "-m", "school_repos.batch"]
+    environment:
+      DATABASE: /app/data/batch.sqlite3
+    volumes:
+      - batch-data:/app/data
+      - ./students.txt:/input/students.txt:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  batch-data:

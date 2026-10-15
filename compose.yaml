@@ -1,0 +1,22 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE: /app/data/school.sqlite3
+      GITHUB_PRIVATE_KEY_FILE: /run/secrets/github-app.pem
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - school-data:/app/data
+      - ./github-app.pem:/run/secrets/github-app.pem:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  school-data:

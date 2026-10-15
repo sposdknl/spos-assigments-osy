@@ -1,0 +1,8 @@
+.env
+.env.batch
+students.txt
+*.pem
+*.sqlite3*
+__pycache__/
+.venv/
+data/

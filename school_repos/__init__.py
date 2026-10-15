@@ -1,0 +1,1 @@
+"""Školní projekty na GitHubu."""
