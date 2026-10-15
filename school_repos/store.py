@@ -87,6 +87,17 @@ class Store:
             db.execute("DELETE FROM roster WHERE assignment=?", (slug,))
             db.executemany("INSERT INTO roster VALUES (?,?,?)", [(slug, x, retained.get(x)) for x in logins])
 
+    def delete_assignment(self, slug):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not db.execute("SELECT 1 FROM assignments WHERE slug=?", (slug,)).fetchone():
+                raise ValueError("Zadání neexistuje.")
+            if db.execute("SELECT 1 FROM projects WHERE assignment=? AND status='creating'", (slug,)).fetchone():
+                raise ValueError("U zadání probíhá nebo bylo přerušeno zakládání projektu. Nejprve ověřte stav projektu a dokončete zotavení.")
+            db.execute("DELETE FROM projects WHERE assignment=?", (slug,))
+            db.execute("DELETE FROM roster WHERE assignment=?", (slug,))
+            db.execute("DELETE FROM assignments WHERE slug=?", (slug,))
+
     def projects(self, slug=None):
         with self.connect() as db:
             return db.execute("SELECT * FROM projects" + (" WHERE assignment=?" if slug else "") +

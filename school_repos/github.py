@@ -30,8 +30,29 @@ def request_json(method, url, token=None, data=None):
             raw = response.read()
             return response.status, json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
-        # GitHub response bodies and tokens must never reach HTML or logs.
-        raise GitHubError(exc.code, f"GitHub API vrátilo HTTP {exc.code}.") from None
+        # Only translate known errors; never echo response bodies or tokens.
+        path = urllib.parse.urlsplit(url).path
+        operation = ("Vytvoření repozitáře z template" if path.endswith("/generate") else
+                     "Přidělení přístupu žákovi" if "/collaborators/" in path else
+                     "Získání instalačního tokenu" if path.endswith("/access_tokens") else
+                     "Načtení údajů z GitHubu")
+        detail = ""
+        if exc.code == 403:
+            try:
+                message = json.loads(exc.read(16384)).get("message", "")
+            except (OSError, ValueError, AttributeError):
+                message = ""
+            if message in ("Resource not accessible by integration", "Resource not accessible by personal access token"):
+                detail = " Token nemá přístup k této operaci. Ověřte oprávnění App a jejich schválení v instalaci organizace."
+            elif exc.headers and exc.headers.get("X-RateLimit-Remaining") == "0":
+                detail = " Byl vyčerpán limit GitHub API. Zkuste to později."
+            elif exc.headers and exc.headers.get("Retry-After"):
+                detail = " GitHub dočasně omezuje požadavky. Zkuste to později."
+            else:
+                detail = " GitHub operaci zakázal; ověřte instalaci App, její oprávnění a pravidla organizace."
+            if path.endswith("/generate"):
+                detail += " Vytváření vyžaduje Administration: Read and write a Contents: Read-only; instalace musí mít přístup k template."
+        raise GitHubError(exc.code, f"{operation}: GitHub API vrátilo HTTP {exc.code}.{detail}") from None
     except (OSError, ValueError) as exc:
         raise GitHubError(503, "GitHub není dostupný nebo vrátil neplatnou odpověď.") from exc
 

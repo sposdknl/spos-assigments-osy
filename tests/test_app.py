@@ -11,7 +11,7 @@ import urllib.parse
 from pathlib import Path
 from unittest.mock import patch
 
-from school_repos.github import GitHub, GitHubError
+from school_repos.github import GitHub, GitHubError, request_json
 from school_repos.manage import recover
 from school_repos.store import Store
 from school_repos.web import Application
@@ -210,6 +210,7 @@ class HTTPTests(BaseTest):
         self.assertIn("SameSite=Lax", headers["Set-Cookie"])
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertEqual(headers["Referrer-Policy"], "strict-origin")
 
     def test_admin_authorization(self):
         self.assertEqual(self.request("/admin")[0], 403)
@@ -230,6 +231,45 @@ class HTTPTests(BaseTest):
         cookie, session = self.login()
         self.assertEqual(self.request("/admin/save", "POST", {
             **self.fields, "csrf": session["csrf"]}, cookie)[0], 403)
+
+    def test_delete_assignment_requires_admin_csrf_and_confirmation(self):
+        cookie, session = self.login()
+        fields = {"slug": "git-vagrant", "confirm": "1", "csrf": session["csrf"]}
+        self.assertEqual(self.request("/admin/delete/git-vagrant", cookie=cookie)[0], 403)
+        self.assertEqual(self.request("/admin/delete", "POST", fields, cookie)[0], 403)
+        cookie, session = self.login(admin=True)
+        self.assertEqual(self.request("/admin/delete", "POST", fields, cookie)[0], 403)
+        fields["csrf"] = session["csrf"]
+        self.assertEqual(self.request("/admin/delete", "POST", {**fields, "confirm": ""}, cookie)[0], 400)
+        self.assertEqual(self.request("/admin/delete", "POST", fields, cookie, "https://evil.example")[0], 403)
+        self.assertIsNotNone(self.store.assignment("git-vagrant"))
+
+    def test_delete_assignment_removes_local_records_only_after_confirmation(self):
+        self.store.provision("git-vagrant", self.user, self.github)
+        cookie, session = self.login(admin=True)
+        status, _, body = self.request("/admin/delete/git-vagrant", cookie=cookie)
+        self.assertEqual(status, 200)
+        self.assertIn("Repozitáře a přístupy na GitHubu zůstanou zachované", body)
+        self.assertIsNotNone(self.store.assignment("git-vagrant"))
+        status, headers, _ = self.request("/admin/delete", "POST", {
+            "slug": "git-vagrant", "confirm": "1", "csrf": session["csrf"]}, cookie)
+        self.assertEqual(status, 303)
+        self.assertEqual(headers["Location"], "/admin")
+        self.assertIsNone(self.store.assignment("git-vagrant"))
+        self.assertEqual(self.store.roster("git-vagrant"), [])
+        self.assertEqual(self.store.projects("git-vagrant"), [])
+        self.assertEqual(len(self.github.created), 1)
+        self.assertEqual(len(self.github.granted), 1)
+
+    def test_delete_assignment_refuses_in_progress_project(self):
+        with self.store.connect() as db:
+            db.execute("INSERT INTO projects VALUES ('git-vagrant',2,'Zak-Demo','zak-demo-git-vagrant',NULL,'creating','',0)")
+        cookie, session = self.login(admin=True)
+        status, _, _ = self.request("/admin/delete", "POST", {
+            "slug": "git-vagrant", "confirm": "1", "csrf": session["csrf"]}, cookie)
+        self.assertEqual(status, 400)
+        self.assertIsNotNone(self.store.assignment("git-vagrant"))
+        self.assertIsNotNone(self.store.project("git-vagrant", 2))
 
     def test_csrf_and_origin_prevent_side_effects(self):
         cookie, session = self.login()
@@ -306,6 +346,21 @@ class HTTPTests(BaseTest):
 
 
 class GitHubTests(unittest.TestCase):
+    def test_forbidden_diagnostic_identifies_operation_without_leaking_body(self):
+        from urllib.error import HTTPError
+        for suffix, operation in (("generate", "Vytvoření repozitáře"),
+                                  ("collaborators/student", "Přidělení přístupu")):
+            url = "https://api.github.com/repos/org/template/" + suffix
+            error = HTTPError(url, 403, "Forbidden", {}, io.BytesIO(json.dumps({
+                "message": "Resource not accessible by integration", "secret": "hidden-token"}).encode()))
+            with patch("school_repos.github.urllib.request.urlopen", side_effect=error):
+                with self.assertRaises(GitHubError) as caught:
+                    request_json("POST", url, "hidden-token", {})
+            self.assertEqual(caught.exception.status, 403)
+            self.assertIn(operation, str(caught.exception))
+            self.assertIn("schválení", str(caught.exception))
+            self.assertNotIn("hidden-token", str(caught.exception))
+
     def test_repository_id_must_match_before_invitation(self):
         github = GitHub({"GITHUB_ORG": "sposdknl"})
         github.token = lambda: "token"

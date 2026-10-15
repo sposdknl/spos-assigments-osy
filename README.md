@@ -196,6 +196,8 @@ Po přihlášení se zobrazuje přehled všech povolených zadání; odkaz na ko
 
 Identifikátor se po vytvoření nemění. Pro jiný ročník nebo nové kolo práce vytvořte nové zadání. Template a viditelnost se po prvním pokusu o založení projektu uzamknou. Změny template se do existujících žákovských projektů automaticky nesynchronizují.
 
+Ve **Správě zadání** lze přes **Smazat zadání** otevřít potvrzení trvalého smazání. Odstraní se zadání, seznam žáků a místní záznamy projektů; repozitáře, pozvánky a oprávnění na GitHubu zůstanou zachované. Pro další pokus použijte nový identifikátor, pokud na GitHubu zůstala repa se stejnými názvy. Smazání je blokované při stavu Zakládání; přerušenou operaci nejprve vyřešte podle části **Chyby a zotavení**.
+
 Uzavření zadání zabrání dalšímu zakládání a opakování přidělení přístupu. **Odebrání žáka ze seznamu ani uzavření zadání neodebere jeho existující oprávnění na GitHubu**; to spravujte přímo na GitHubu. Pozvánky jsou v aplikaci označeny jako odeslané; jejich pozdější přijetí aplikace automaticky nesleduje.
 
 ## Chyby a zotavení

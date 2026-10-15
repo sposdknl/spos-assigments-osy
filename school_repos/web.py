@@ -91,7 +91,9 @@ class Application:
                 self.send_header("Content-Length", str(len(payload)))
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
-                self.send_header("Referrer-Policy", "no-referrer")
+                # no-referrer makes browser form POSTs send Origin: null.
+                # Keep the origin for CSRF checks without exposing URL paths or queries.
+                self.send_header("Referrer-Policy", "strict-origin")
                 self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
                 if getattr(self, "new_cookie", None):
                     secure = "; Secure" if app.config["APP_URL"].startswith("https://") else ""
@@ -192,6 +194,11 @@ class Application:
                 if path == "/admin/new":
                     self.require_admin()
                     return self.assignment_form()
+                if path.startswith("/admin/delete/"):
+                    self.require_admin()
+                    assignment = app.store.assignment(path.removeprefix("/admin/delete/"))
+                    if assignment:
+                        return self.delete_assignment_page(assignment)
                 if path.startswith("/admin/edit/"):
                     self.require_admin()
                     assignment = app.store.assignment(path.removeprefix("/admin/edit/"))
@@ -259,7 +266,7 @@ class Application:
                 self.layout(a["title"], f'''<a class="back" href="/">← Všechna zadání</a><section class="detail"><div><p class="eyebrow">Zadání / OSY</p><h1>{esc(a['title'])}</h1><p class="description">{esc(a['description'])}</p>{action}</div><aside class="panel"><h3>Váš repozitář</h3><code class="repo-name">{esc(app.config['GITHUB_ORG'])}/{esc(name)}</code><dl><dt>Zdrojový template</dt><dd>{esc(a['template'])}</dd><dt>Viditelnost</dt><dd>{'Soukromý' if a['visibility']=='private' else 'Veřejný'}</dd><dt>Vaše oprávnění</dt><dd>Zápis (Write)</dd></dl><p class="muted">Projekt vlastní škola. Commity vytváříte pod svým účtem.</p></aside></section>''')
 
             def admin_page(self):
-                cards = "".join(f'<div class="admin-item">{self.card(a)}<div class="admin-links"><a href="/admin/edit/{esc(a["slug"])}">Upravit zadání a žáky</a><span>{len(app.store.roster(a["slug"]))} žáků · {len(app.store.projects(a["slug"]))} projektů</span></div></div>' for a in app.store.assignments())
+                cards = "".join(f'<div class="admin-item">{self.card(a)}<div class="admin-links"><a href="/admin/edit/{esc(a["slug"])}">Upravit zadání a žáky</a><a href="/admin/delete/{esc(a["slug"])}">Smazat zadání</a><span>{len(app.store.roster(a["slug"]))} žáků · {len(app.store.projects(a["slug"]))} projektů</span></div></div>' for a in app.store.assignments())
                 rows = ""
                 for p in app.store.projects():
                     repo = esc(p["name"])
@@ -268,6 +275,17 @@ class Application:
                     rows += f'<tr><td>@{esc(p["login"])}</td><td>{esc(p["assignment"])}</td><td>{repo}</td><td>{STATUS[p["status"]]}<small>{esc(p["error"])}</small></td></tr>'
                 table = f'<div class="table-wrap"><table><thead><tr><th>Žák</th><th>Zadání</th><th>Repozitář</th><th>Stav</th></tr></thead><tbody>{rows}</tbody></table></div>' if rows else '<p class="empty">Žáci zatím nevytvořili žádné projekty.</p>'
                 self.layout("Správa zadání", f'<div class="page-title"><div><p class="eyebrow">Učitelská administrace</p><h1>Správa zadání</h1></div><a class="button" href="/admin/new">+ Nové zadání</a></div><section class="cards">{cards}</section><section class="panel"><h2>Žákovské projekty</h2>{table}</section>')
+
+            def delete_assignment_page(self, assignment):
+                count = len(app.store.projects(assignment["slug"]))
+                self.layout("Smazat zadání", f'''<a class="back" href="/admin">← Správa zadání</a>
+                    <section class="panel narrow"><h1>Smazat zadání</h1><h2>{esc(assignment['title'])}</h2>
+                    <p>Trvale se smaže zadání, seznam povolených žáků a místní záznamy projektů ({count}).</p>
+                    <p>Repozitáře a přístupy na GitHubu zůstanou zachované. Při opětovném použití stejného identifikátoru mohou názvy repozitářů kolidovat.</p>
+                    <form method="post" action="/admin/delete">{self.csrf()}
+                    <input type="hidden" name="slug" value="{esc(assignment['slug'])}">
+                    <label class="checkbox"><input type="checkbox" name="confirm" value="1" required> Potvrzuji trvalé smazání zadání.</label>
+                    <button>Smazat zadání</button><a href="/admin">Zrušit</a></form></section>''')
 
             def assignment_form(self, assignment=None, error="", fields=None):
                 a = fields if fields is not None else dict(assignment) if assignment else {
@@ -288,7 +306,11 @@ class Application:
                 try:
                     self.session()
                     if self.headers.get("Origin") and self.headers["Origin"] != app.config["APP_URL"]:
-                        raise PermissionError("Požadavek pochází z jiné stránky.")
+                        raise PermissionError(
+                            "Požadavek pochází z jiné stránky. "
+                            f"Prohlížeč poslal Origin: {self.headers['Origin']}. "
+                            f"Běžící aplikace očekává APP_URL: {app.config['APP_URL']}. "
+                            "Po změně konfigurace aplikaci restartujte.")
                     if self.headers.get_content_type() != "application/x-www-form-urlencoded":
                         raise ValueError("Nepodporovaný formát formuláře.")
                     size = int(self.headers.get("Content-Length", "0"))
@@ -311,6 +333,12 @@ class Application:
                             app.store.save_assignment(fields)
                         except ValueError as exc:
                             return self.assignment_form(app.store.assignment(fields.get("slug", "")), str(exc), fields)
+                        return self.redirect("/admin")
+                    if path == "/admin/delete":
+                        self.require_admin()
+                        if fields.get("confirm") != "1":
+                            raise ValueError("Potvrďte smazání zadání.")
+                        app.store.delete_assignment(fields.get("slug", ""))
                         return self.redirect("/admin")
                     if path == "/projects/create":
                         if not self.user:
